@@ -33,6 +33,8 @@ export async function upsertMarkets(markets: SoccerMarket[]): Promise<void> {
     volume: m.volume,
     end_date: m.endDate,
     tags: m.tags,
+    event_title: m.eventTitle,
+    event_slug: m.eventSlug,
     updated_at: new Date().toISOString(),
   }));
 

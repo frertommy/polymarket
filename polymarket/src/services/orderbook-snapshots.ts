@@ -6,6 +6,7 @@
  */
 import { CLOB_BASE } from "../config.js";
 import { log } from "../logger.js";
+import { pfetch } from "../fetch.js";
 
 export interface OrderbookSnapshot {
   assetId: string;
@@ -48,9 +49,9 @@ async function fetchSnapshot(assetId: string): Promise<OrderbookSnapshot | null>
   try {
     // Fetch book + midpoint + last trade in parallel
     const [bookResp, midResp, lastResp] = await Promise.all([
-      fetch(`${CLOB_BASE}/book?token_id=${assetId}`),
-      fetch(`${CLOB_BASE}/midpoint?token_id=${assetId}`),
-      fetch(`${CLOB_BASE}/last-trade-price?token_id=${assetId}`),
+      pfetch(`${CLOB_BASE}/book?token_id=${assetId}`),
+      pfetch(`${CLOB_BASE}/midpoint?token_id=${assetId}`),
+      pfetch(`${CLOB_BASE}/last-trade-price?token_id=${assetId}`),
     ]);
 
     if (!bookResp.ok) return null;

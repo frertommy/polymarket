@@ -1,8 +1,8 @@
 -- ═══════════════════════════════════════════════════════════════
--- Soccer betting market data — 4 table schema
+-- Polymarket soccer betting data — 3 table schema
 -- ═══════════════════════════════════════════════════════════════
 
--- 1. Polymarket markets (discovered via Gamma API)
+-- 1. Polymarket markets (discovered via Gamma /events?tag_slug=soccer)
 CREATE TABLE IF NOT EXISTS polymarket_markets (
   id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   condition_id    TEXT NOT NULL UNIQUE,
@@ -15,39 +15,17 @@ CREATE TABLE IF NOT EXISTS polymarket_markets (
   volume          NUMERIC,
   end_date        TIMESTAMPTZ,
   tags            JSONB DEFAULT '[]',
+  event_title     TEXT,
+  event_slug      TEXT,
   discovered_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX idx_poly_markets_active ON polymarket_markets (active);
 CREATE INDEX idx_poly_markets_updated ON polymarket_markets (updated_at);
+CREATE INDEX idx_poly_markets_event ON polymarket_markets (event_slug);
 
--- 2. Kalshi markets (discovered via REST API)
-CREATE TABLE IF NOT EXISTS kalshi_markets (
-  id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  ticker          TEXT NOT NULL UNIQUE,
-  event_ticker    TEXT,
-  series_ticker   TEXT,
-  title           TEXT NOT NULL,
-  subtitle        TEXT,
-  yes_ask         NUMERIC,
-  yes_bid         NUMERIC,
-  no_ask          NUMERIC,
-  no_bid          NUMERIC,
-  last_price      NUMERIC,
-  volume          INTEGER,
-  open_interest   INTEGER,
-  status          TEXT,
-  close_time      TIMESTAMPTZ,
-  discovered_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_kalshi_markets_status ON kalshi_markets (status);
-CREATE INDEX idx_kalshi_markets_series ON kalshi_markets (series_ticker);
-CREATE INDEX idx_kalshi_markets_updated ON kalshi_markets (updated_at);
-
--- 3. Trades (real-time from Polymarket WS)
+-- 2. Trades (real-time from Polymarket WS)
 CREATE TABLE IF NOT EXISTS trades (
   id                BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   platform          TEXT NOT NULL DEFAULT 'polymarket',
@@ -65,11 +43,11 @@ CREATE INDEX idx_trades_asset ON trades (asset_id);
 CREATE INDEX idx_trades_platform ON trades (platform);
 CREATE INDEX idx_trades_created ON trades (created_at);
 
--- 4. Orderbook snapshots (both platforms)
+-- 3. Orderbook snapshots (Polymarket CLOB)
 CREATE TABLE IF NOT EXISTS orderbook_snapshots (
   id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  platform        TEXT NOT NULL,          -- 'polymarket' | 'kalshi'
-  asset_id        TEXT NOT NULL,          -- clobTokenId or ticker
+  platform        TEXT NOT NULL DEFAULT 'polymarket',
+  asset_id        TEXT NOT NULL,          -- clobTokenId
   midpoint        NUMERIC,
   spread          NUMERIC,
   best_bid        NUMERIC,
@@ -80,7 +58,5 @@ CREATE TABLE IF NOT EXISTS orderbook_snapshots (
   snapshot_time   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_snapshots_platform ON orderbook_snapshots (platform);
 CREATE INDEX idx_snapshots_asset ON orderbook_snapshots (asset_id);
 CREATE INDEX idx_snapshots_time ON orderbook_snapshots (snapshot_time);
-CREATE INDEX idx_snapshots_platform_asset ON orderbook_snapshots (platform, asset_id);

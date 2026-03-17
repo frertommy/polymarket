@@ -8,13 +8,12 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
-    "@polymarket/clob-client": "^5.8.0",
-    "poly-websockets": "^1.0.2",
-    "@supabase/supabase-js": "^2.49.0"
+    "@supabase/supabase-js": "^2.49.0",
+    "undici": "^7.24.4"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0"
   }
 }

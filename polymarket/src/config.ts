@@ -19,10 +19,3 @@ export const GAMMA_BASE = "https://gamma-api.polymarket.com";
 export const DISCOVERY_INTERVAL = 5 * 60 * 1000;  // 5 min — refresh soccer market list
 export const SNAPSHOT_INTERVAL = 30 * 1000;         // 30s — REST orderbook snapshots
 
-// ─── Soccer keywords for market filtering ────────────────────
-export const SOCCER_TAGS = ["Soccer", "soccer", "Football", "football"];
-export const SOCCER_KEYWORDS = [
-  "premier league", "la liga", "bundesliga", "serie a", "ligue 1",
-  "champions league", "europa league", "mls", "world cup",
-  "epl", "ucl", "uefa",
-];
