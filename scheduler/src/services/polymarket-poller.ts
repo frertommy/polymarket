@@ -1,16 +1,11 @@
 /**
- * Polymarket data poller — analytics/validation only, does NOT feed pricing engine.
- * Polls match odds and futures from the Gamma API (free, no auth, no credits).
+ * Polymarket data poller — polls match odds and futures from the Gamma API.
+ * Free, no auth, no credits required.
  */
 import { getSupabase } from "../api/supabase-client.js";
-import {
-  resolveOddsApiName,
-  matchEventToFixture,
-  type TeamLookup,
-} from "../utils/team-names.js";
+import { resolveTeamName } from "../utils/team-names.js";
 import { POLYMARKET_SERIES_IDS, POLYMARKET_FUTURES_SLUGS } from "../config.js";
 import { log } from "../logger.js";
-import type { LiveOddsEvent } from "../types.js";
 
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const BATCH_SIZE = 500;
@@ -20,35 +15,28 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ─── Polymarket team name cleaning ──────────────────────────
-// Polymarket uses "Arsenal FC", "Brighton & Hove Albion FC", "AFC Bournemouth", etc.
 function cleanPolymarketName(raw: string): string {
   let name = raw.trim();
-  // Strip year suffixes FIRST (before FC strip): 1846, 1899, 1901, 1907, 1909, 1910, 1913
   name = name.replace(/\s+\d{4}$/g, "");
-  // Strip trailing suffixes: FC, AFC, SCO, CF, CFC, Calcio
   name = name.replace(/\s+(?:FC|AFC|SCO|CF|CFC)$/i, "");
-  // Strip leading prefixes: AFC (not FC — "FC St. Pauli", "FC Barcelona" need alias handling)
   name = name.replace(/^AFC\s+/i, "");
-  // Normalize ampersand
   name = name.replace(/&/g, "and");
-  // Strip "de/di" prepositions in the middle of names (Celta de Vigo → Celta Vigo)
   name = name.replace(/\s+de\s+/gi, " ");
   name = name.replace(/\s+di\s+/gi, " ");
-  // Strip "Calcio" from Italian names
   name = name.replace(/\s+Calcio$/i, "");
   return name.trim();
 }
 
 function resolvePolymarketName(name: string): string {
-  return resolveOddsApiName(cleanPolymarketName(name));
+  return resolveTeamName(cleanPolymarketName(name));
 }
 
 // ─── Gamma API types ────────────────────────────────────────
 interface GammaMarket {
   id: string;
   question: string;
-  outcomes: string; // JSON string: '["Yes", "No"]'
-  outcomePrices: string; // JSON string: '["0.485", "0.515"]'
+  outcomes: string;
+  outcomePrices: string;
   volumeNum: number;
   groupItemTitle?: string;
   active: boolean;
@@ -119,7 +107,6 @@ async function getPreviousVolumes(
   const prevMap = new Map<string, number>();
   if (eventIds.length === 0) return prevMap;
 
-  // Query in batches of 50 event IDs
   for (let i = 0; i < eventIds.length; i += 50) {
     const batch = eventIds.slice(i, i + 50);
     const { data } = await sb
@@ -188,12 +175,11 @@ export async function pollPolymarketMatches(): Promise<{
 
       for (const event of events) {
         const teams = parseMatchTeams(event.title);
-        if (!teams) continue; // skip non-match events
+        if (!teams) continue;
 
         const eventId = String(event.id);
         allEventIds.push(eventId);
 
-        // Determine event type from title suffix
         const suffix = event.title.includes(" - ")
           ? event.title.split(" - ").slice(1).join(" - ").trim()
           : "";
@@ -221,7 +207,6 @@ export async function pollPolymarketMatches(): Promise<{
             } else if (git === awayTeam.toLowerCase()) {
               awayProb = yesPrice;
             } else {
-              // Fallback: check question text
               const q = mkt.question.toLowerCase();
               if (q.includes("draw")) drawProb = yesPrice;
               else if (q.includes(homeTeam.toLowerCase().slice(0, 10)))
@@ -298,11 +283,9 @@ export async function pollPolymarketMatches(): Promise<{
       );
     }
 
-    // Rate limit between leagues
     if (i < leagues.length - 1) await sleep(500);
   }
 
-  // ─── Compute volume deltas ────────────────────────────────
   if (allRows.length > 0) {
     const uniqueIds = [...new Set(allEventIds)];
     const prevMap = await getPreviousVolumes(
@@ -368,7 +351,6 @@ export async function pollPolymarketFutures(): Promise<{
       allEventIds.push(eventId);
       let teamCount = 0;
 
-      // Each market is a binary "Will X win?" — one per team
       for (const mkt of event.markets) {
         if (mkt.closed || !mkt.active) continue;
 
@@ -384,7 +366,6 @@ export async function pollPolymarketFutures(): Promise<{
         const yesPrice = prices[0] || 0;
         if (yesPrice <= 0) continue;
 
-        // Extract team name from groupItemTitle or question
         const teamRaw =
           mkt.groupItemTitle ??
           mkt.question
@@ -392,7 +373,6 @@ export async function pollPolymarketFutures(): Promise<{
             .replace(/\s+win.*$/i, "")
             .trim();
 
-        // Skip meta-markets like "Other", "Club A", etc.
         if (/^(other|club [a-z]|none)$/i.test(teamRaw)) continue;
 
         const team = resolvePolymarketName(teamRaw);
@@ -418,7 +398,6 @@ export async function pollPolymarketFutures(): Promise<{
       );
     }
 
-    // Rate limit between leagues
     if (i < leagues.length - 1) await sleep(500);
   }
 
@@ -427,7 +406,6 @@ export async function pollPolymarketFutures(): Promise<{
     return { rowsInserted: 0 };
   }
 
-  // ─── Compute volume deltas ────────────────────────────────
   const uniqueIds = [...new Set(allEventIds)];
   const prevMap = await getPreviousVolumes("polymarket_futures", uniqueIds);
 
@@ -446,92 +424,4 @@ export async function pollPolymarketFutures(): Promise<{
   );
   log.info(`Polymarket futures: ${inserted} rows inserted, ${failed} failed`);
   return { rowsInserted: inserted };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 3. matchPolymarketToFixtures — link events to our fixtures
-// ═══════════════════════════════════════════════════════════════
-export async function matchPolymarketToFixtures(
-  lookup: TeamLookup
-): Promise<{ matched: number }> {
-  const sb = getSupabase();
-
-  // Get unmatched events (fixture_id IS NULL)
-  const { data: unmatched, error } = await sb
-    .from("polymarket_match_odds")
-    .select("polymarket_event_id, event_title")
-    .is("fixture_id", null)
-    .order("snapshot_time", { ascending: false })
-    .limit(1000);
-
-  if (error) {
-    log.warn("Failed to query unmatched Polymarket rows:", error.message);
-    return { matched: 0 };
-  }
-
-  if (!unmatched || unmatched.length === 0) {
-    return { matched: 0 };
-  }
-
-  // Deduplicate by polymarket_event_id
-  const seen = new Set<string>();
-  const uniqueEvents: { polymarket_event_id: string; event_title: string }[] =
-    [];
-
-  for (const row of unmatched) {
-    if (!seen.has(row.polymarket_event_id)) {
-      seen.add(row.polymarket_event_id);
-      uniqueEvents.push(row);
-    }
-  }
-
-  let matchedCount = 0;
-
-  for (const ev of uniqueEvents) {
-    const teams = parseMatchTeams(ev.event_title);
-    if (!teams) continue;
-
-    const resolvedHome = resolvePolymarketName(teams.home);
-    const resolvedAway = resolvePolymarketName(teams.away);
-
-    // Build a synthetic LiveOddsEvent for the existing matcher
-    const fakeEvent: LiveOddsEvent = {
-      id: ev.polymarket_event_id,
-      sport_key: "",
-      commence_time: new Date().toISOString(), // approximate — will match within 2 day window
-      home_team: resolvedHome,
-      away_team: resolvedAway,
-      bookmakers: [],
-    };
-
-    const fixtureId = matchEventToFixture(fakeEvent, lookup);
-    if (fixtureId === null) continue;
-
-    // Write the integer fixture_id directly — column is now bigint,
-    // matching matches.fixture_id and odds_snapshots.fixture_id
-    const { error: updateErr } = await sb
-      .from("polymarket_match_odds")
-      .update({ fixture_id: fixtureId })
-      .eq("polymarket_event_id", ev.polymarket_event_id);
-
-    if (updateErr) {
-      log.warn(
-        `Failed to update fixture_id for ${ev.polymarket_event_id}:`,
-        updateErr.message
-      );
-    } else {
-      matchedCount++;
-      log.debug(
-        `Matched Polymarket ${ev.event_title} → fixture ${fixtureId}`
-      );
-    }
-  }
-
-  if (matchedCount > 0) {
-    log.info(
-      `Polymarket fixture matching: ${matchedCount}/${uniqueEvents.length} matched`
-    );
-  }
-
-  return { matched: matchedCount };
 }
