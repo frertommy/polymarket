@@ -7,21 +7,29 @@ import {
 } from "./services/market-discovery.js";
 import { PolymarketStreamer, type TradeEvent } from "./services/ws-streamer.js";
 import { fetchOrderbookSnapshots } from "./services/orderbook-snapshots.js";
+import {
+  initSupabase,
+  upsertMarkets,
+  bufferTrade,
+  flushTrades,
+  storeSnapshots,
+} from "./services/supabase-store.js";
 
 validateEnv();
+initSupabase();
 
 // ─── State ──────────────────────────────────────────────────
 let markets: SoccerMarket[] = [];
 let assetIds: string[] = [];
-const tradeLog: TradeEvent[] = [];
+let tradeCount = 0;
 
-// ─── Trade handler: accumulate trades ───────────────────────
+// ─── Trade handler: buffer → Supabase ───────────────────────
 function onTrade(trade: TradeEvent): void {
-  tradeLog.push(trade);
+  tradeCount++;
+  bufferTrade(trade);
 
-  // Log every 10th trade to avoid spam
-  if (tradeLog.length % 10 === 0) {
-    log.info(`Trades accumulated: ${tradeLog.length}`);
+  if (tradeCount % 50 === 0) {
+    log.info(`Trades received: ${tradeCount}`);
   }
 }
 
@@ -47,6 +55,9 @@ async function refreshMarkets(streamer: PolymarketStreamer): Promise<void> {
   markets = newMarkets;
   assetIds = newAssetIds;
 
+  // Persist to Supabase
+  await upsertMarkets(markets);
+
   log.info(
     `Markets refreshed: ${markets.length} markets, ${assetIds.length} assets`
   );
@@ -56,19 +67,17 @@ async function refreshMarkets(streamer: PolymarketStreamer): Promise<void> {
 async function snapshotCycle(): Promise<void> {
   if (assetIds.length === 0) return;
 
-  // Only snapshot a subset to avoid rate limits (top 50 by volume)
   const topAssets = assetIds.slice(0, 50);
   const snapshots = await fetchOrderbookSnapshots(topAssets);
 
   if (snapshots.length > 0) {
+    // Persist to Supabase
+    await storeSnapshots(snapshots);
+
     const avgSpread =
       snapshots.reduce((s, snap) => s + snap.spread, 0) / snapshots.length;
-    const avgDepth =
-      snapshots.reduce((s, snap) => s + snap.bidDepth + snap.askDepth, 0) /
-      snapshots.length;
-
     log.info(
-      `Snapshots: ${snapshots.length} books, avg spread ${avgSpread.toFixed(4)}, avg depth ${avgDepth.toFixed(0)}`
+      `Snapshots: ${snapshots.length} books, avg spread ${avgSpread.toFixed(4)}`
     );
   }
 }
@@ -76,7 +85,7 @@ async function snapshotCycle(): Promise<void> {
 // ─── Main ───────────────────────────────────────────────────
 async function main(): Promise<void> {
   log.info("═══ Polymarket Soccer Poller starting ═══");
-  log.info("Sources: poly-websockets (WS) + clob-client (REST)");
+  log.info("Sources: poly-websockets (WS) + CLOB REST + Supabase storage");
 
   // 1. Start WS streamer
   const streamer = new PolymarketStreamer({ onTrade });
@@ -103,28 +112,33 @@ async function main(): Promise<void> {
     }
   }, SNAPSHOT_INTERVAL);
 
-  // 5. Periodic stats logging
+  // 5. Periodic trade flush + stats
+  const flushTimer = setInterval(async () => {
+    await flushTrades();
+  }, 10_000);
+
   const statsTimer = setInterval(() => {
     const stats = streamer.getStats();
     log.info(
-      `Stats: ${stats.subscribedAssets} assets subscribed, ` +
-      `${stats.tradesReceived} WS trades, ${tradeLog.length} logged`
+      `Stats: ${stats.subscribedAssets} assets, ${tradeCount} trades, ${markets.length} markets`
     );
   }, 60_000);
 
   // ─── Graceful shutdown ─────────────────────────────────────
-  const shutdown = () => {
+  const shutdown = async () => {
     log.info("Shutting down...");
     clearInterval(discoveryTimer);
     clearInterval(snapshotTimer);
+    clearInterval(flushTimer);
     clearInterval(statsTimer);
+    await flushTrades(); // Flush remaining trades
     streamer.stop();
-    log.info(`Final: ${tradeLog.length} trades logged`);
+    log.info(`Final: ${tradeCount} trades processed`);
     process.exit(0);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", () => { shutdown(); });
+  process.on("SIGTERM", () => { shutdown(); });
 
   log.info("═══ Polymarket poller running ═══");
 }

@@ -6,8 +6,14 @@ import {
   type KalshiMarket,
 } from "./services/market-discovery.js";
 import { fetchOrderbooks } from "./services/orderbook-poller.js";
+import {
+  initSupabase,
+  upsertMarkets,
+  storeOrderbooks,
+} from "./services/supabase-store.js";
 
 validateEnv();
+initSupabase();
 
 // ─── State ──────────────────────────────────────────────────
 let markets: KalshiMarket[] = [];
@@ -24,6 +30,9 @@ async function refreshMarkets(): Promise<void> {
   markets = newMarkets;
   tickers = extractTickers(markets);
 
+  // Persist to Supabase
+  await upsertMarkets(markets);
+
   log.info(`Markets refreshed: ${markets.length} markets, ${tickers.length} tickers`);
 }
 
@@ -31,19 +40,17 @@ async function refreshMarkets(): Promise<void> {
 async function orderbookCycle(): Promise<void> {
   if (tickers.length === 0) return;
 
-  // Poll top 50 by volume
   const topTickers = tickers.slice(0, 50);
   const orderbooks = await fetchOrderbooks(topTickers);
 
   if (orderbooks.length > 0) {
+    // Persist to Supabase
+    await storeOrderbooks(orderbooks);
+
     const avgSpread =
       orderbooks.reduce((s, ob) => s + ob.spread, 0) / orderbooks.length;
-    const avgDepth =
-      orderbooks.reduce((s, ob) => s + ob.totalBidDepth + ob.totalAskDepth, 0) /
-      orderbooks.length;
-
     log.info(
-      `Orderbooks: ${orderbooks.length} books, avg spread ${avgSpread.toFixed(4)}, avg depth ${avgDepth.toFixed(0)}`
+      `Orderbooks: ${orderbooks.length} books, avg spread ${avgSpread.toFixed(4)}`
     );
   }
 }
@@ -51,7 +58,7 @@ async function orderbookCycle(): Promise<void> {
 // ─── Main ───────────────────────────────────────────────────
 async function main(): Promise<void> {
   log.info("═══ Kalshi Soccer Poller starting ═══");
-  log.info("Source: raw REST fetch (no auth required for public endpoints)");
+  log.info("Source: raw REST fetch + Supabase storage");
 
   // 1. Initial market discovery
   await refreshMarkets();
