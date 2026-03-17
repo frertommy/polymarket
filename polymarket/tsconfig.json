@@ -4,11 +4,11 @@
     "module": "Node16",
     "moduleResolution": "Node16",
     "outDir": "dist",
-    "rootDir": "scheduler/src",
+    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true
   },
-  "include": ["scheduler/src/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }
