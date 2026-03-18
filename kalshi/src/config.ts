@@ -13,6 +13,7 @@ export function validateEnv(): void {
 
 // ─── Kalshi API ──────────────────────────────────────────────
 export const KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2";
+export const KALSHI_API_KEY = process.env.KALSHI_API_KEY ?? "";
 
 // Series tickers for match-winner markets per league
 export const KALSHI_SERIES = [

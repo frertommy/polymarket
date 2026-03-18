@@ -9,6 +9,7 @@
  *   - No WS available without auth, so REST is our path
  */
 import { KALSHI_BASE, PRICE_CHANGE_THRESHOLD } from "../config.js";
+import { kalshiFetch } from "../fetch.js";
 import { log } from "../logger.js";
 import type { KalshiMarket, GroupedMatch, OddsRow } from "../types.js";
 import { writeOddsRows } from "./supabase-writer.js";
@@ -71,7 +72,7 @@ async function fetchMarketPrices(
   const fetches = [...eventTickers].map(async (eventTicker) => {
     try {
       const url = `${KALSHI_BASE}/markets?event_ticker=${eventTicker}&limit=10`;
-      const res = await fetch(url);
+      const res = await kalshiFetch(url);
       if (!res.ok) return;
       const data = (await res.json()) as { markets: KalshiMarket[] };
       for (const m of data.markets ?? []) {

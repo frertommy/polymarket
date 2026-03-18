@@ -4,6 +4,7 @@
  * resolves team names to MSI canonical, links to fixture_ids.
  */
 import { KALSHI_BASE, KALSHI_SERIES } from "../config.js";
+import { kalshiFetch } from "../fetch.js";
 import { log } from "../logger.js";
 import type {
   KalshiEvent,
@@ -40,7 +41,7 @@ async function fetchSeriesEvents(
     if (cursor) url += `&cursor=${cursor}`;
 
     try {
-      const res = await fetch(url);
+      const res = await kalshiFetch(url);
       if (!res.ok) {
         log.warn(`Kalshi API returned ${res.status} for ${seriesTicker}`);
         break;
@@ -75,7 +76,7 @@ async function fetchEventMarkets(
 ): Promise<KalshiMarket[]> {
   const url = `${KALSHI_BASE}/markets?event_ticker=${eventTicker}&limit=50`;
   try {
-    const res = await fetch(url);
+    const res = await kalshiFetch(url);
     if (!res.ok) return [];
     const data = (await res.json()) as { markets: KalshiMarket[] };
     return data.markets ?? [];
