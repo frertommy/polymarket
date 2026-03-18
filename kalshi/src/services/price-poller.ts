@@ -31,10 +31,19 @@ let totalSkipped = 0;
 // ─── Update match data (called on discovery refresh) ────────
 
 export function updateMatches(matches: GroupedMatch[]): void {
+  const oldMap = matchMap;
   matchMap = new Map();
   kickoffMap = new Map();
 
   for (const m of matches) {
+    // Carry over lastWritten values from previous cycle to avoid re-writing same prices
+    const prev = oldMap.get(m.eventTicker);
+    if (prev) {
+      m.lastWrittenHome = prev.lastWrittenHome;
+      m.lastWrittenDraw = prev.lastWrittenDraw;
+      m.lastWrittenAway = prev.lastWrittenAway;
+      m.lastWriteTime = prev.lastWriteTime;
+    }
     matchMap.set(m.eventTicker, m);
     kickoffMap.set(m.fixtureId, m.gameStartTime);
   }

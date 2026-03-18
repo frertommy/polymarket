@@ -45,12 +45,22 @@ export class PriceTracker {
     matches: GroupedMatch[],
     assetIndex: Map<string, AssetEntry>
   ): void {
-    // Rebuild internal maps
+    // Save old matches to carry over lastWritten values
+    const oldMatches = new Map(this.matches);
+
     this.matches.clear();
     this.assetIndex.clear();
     this.kickoffMap.clear();
 
     for (const match of matches) {
+      // Carry over lastWritten values to avoid re-writing same prices after refresh
+      const prev = oldMatches.get(match.negRiskMarketId);
+      if (prev) {
+        match.lastWrittenHome = prev.lastWrittenHome;
+        match.lastWrittenDraw = prev.lastWrittenDraw;
+        match.lastWrittenAway = prev.lastWrittenAway;
+        match.lastWriteTime = prev.lastWriteTime;
+      }
       this.matches.set(match.negRiskMarketId, match);
       this.kickoffMap.set(match.fixtureId, match.gameStartTime);
     }
