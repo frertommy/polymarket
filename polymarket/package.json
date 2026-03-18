@@ -8,6 +8,7 @@
     "dev": "tsx src/index.ts"
   },
   "dependencies": {
+    "@nevuamarkets/poly-websockets": "^1.0.2",
     "@supabase/supabase-js": "^2.49.0",
     "https-proxy-agent": "^8.0.0",
     "node-fetch": "^3.3.2",
