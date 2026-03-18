@@ -1,11 +1,12 @@
 /**
- * WebSocket streamer — connects to Polymarket CLOB WS via poly-websockets.
+ * WebSocket streamer — connects to Polymarket CLOB WS via @nevuamarkets/poly-websockets.
  * Streams real-time trades, orderbook updates, and price changes for soccer markets.
  *
  * Uses: wss://ws-subscriptions-clob.polymarket.com/ws/market
  * No auth required.
  */
-import { WSSubscriptionManager } from "poly-websockets";
+import { WSSubscriptionManager } from "@nevuamarkets/poly-websockets";
+import type { LastTradePriceEvent, PolymarketPriceUpdateEvent } from "@nevuamarkets/poly-websockets";
 import { log } from "../logger.js";
 
 export interface TradeEvent {
@@ -45,37 +46,41 @@ export class PolymarketStreamer {
     log.info("Starting Polymarket WS streamer...");
 
     this.manager = new WSSubscriptionManager({
-      onLastTradePrice: (event) => {
-        this.tradeCount++;
-        const trade: TradeEvent = {
-          assetId: String(event.asset_id ?? ""),
-          market: String(event.market ?? ""),
-          price: parseFloat(String(event.price ?? "0")),
-          size: parseFloat(String(event.size ?? "0")),
-          side: String(event.side ?? ""),
-          timestamp: String(event.timestamp ?? new Date().toISOString()),
-          transactionHash: String(event.transaction_hash ?? ""),
-        };
+      onLastTradePrice: async (events: LastTradePriceEvent[]) => {
+        for (const event of events) {
+          this.tradeCount++;
+          const trade: TradeEvent = {
+            assetId: String(event.asset_id ?? ""),
+            market: String(event.market ?? ""),
+            price: parseFloat(String(event.price ?? "0")),
+            size: parseFloat(String(event.size ?? "0")),
+            side: String(event.side ?? ""),
+            timestamp: String(event.timestamp ?? new Date().toISOString()),
+            transactionHash: String(event.transaction_hash ?? ""),
+          };
 
-        log.debug(
-          `Trade: ${trade.side} ${trade.size} @ ${trade.price} [${trade.assetId.slice(0, 8)}...]`
-        );
+          log.debug(
+            `Trade: ${trade.side} ${trade.size} @ ${trade.price} [${trade.assetId.slice(0, 8)}...]`
+          );
 
-        this.callbacks.onTrade?.(trade);
+          this.callbacks.onTrade?.(trade);
+        }
       },
 
-      onPolymarketPriceUpdate: (event) => {
-        const update: PriceUpdate = {
-          assetId: String(event.asset_id ?? ""),
-          price: parseFloat(String(event.price ?? "0")),
-          midpoint: parseFloat(String(event.midpoint ?? "0")),
-          spread: parseFloat(String(event.spread ?? "0")),
-        };
+      onPolymarketPriceUpdate: async (events: PolymarketPriceUpdateEvent[]) => {
+        for (const event of events) {
+          const update: PriceUpdate = {
+            assetId: String(event.asset_id ?? ""),
+            price: parseFloat(String(event.price ?? "0")),
+            midpoint: parseFloat(String(event.midpoint ?? "0")),
+            spread: parseFloat(String(event.spread ?? "0")),
+          };
 
-        this.callbacks.onPriceUpdate?.(update);
+          this.callbacks.onPriceUpdate?.(update);
+        }
       },
 
-      onError: (err) => {
+      onError: async (err: Error) => {
         log.error("WS error:", err.message);
         this.callbacks.onError?.(err);
       },
@@ -125,9 +130,9 @@ export class PolymarketStreamer {
     };
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.manager) {
-      this.manager.close();
+      await this.manager.clearState();
       this.manager = null;
     }
     this.subscribedAssets.clear();

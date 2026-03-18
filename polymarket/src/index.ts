@@ -132,7 +132,7 @@ async function main(): Promise<void> {
     clearInterval(flushTimer);
     clearInterval(statsTimer);
     await flushTrades(); // Flush remaining trades
-    streamer.stop();
+    await streamer.stop();
     log.info(`Final: ${tradeCount} trades processed`);
     process.exit(0);
   };
