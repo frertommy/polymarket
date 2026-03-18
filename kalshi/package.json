@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r src/data dist/data",
     "start": "node dist/index.js",
     "dev": "node --env-file=.env --import tsx src/index.ts"
   },
