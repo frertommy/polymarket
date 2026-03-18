@@ -1,6 +1,6 @@
 {
-  "name": "polymarket-poller",
-  "version": "2.0.0",
+  "name": "kalshi-poller",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "build": "tsc",
@@ -8,11 +8,7 @@
     "dev": "node --env-file=.env --import tsx src/index.ts"
   },
   "dependencies": {
-    "@nevuamarkets/poly-websockets": "^1.0.2",
-    "@supabase/supabase-js": "^2.49.0",
-    "https-proxy-agent": "^8.0.0",
-    "node-fetch": "^3.3.2",
-    "undici": "^7.24.4"
+    "@supabase/supabase-js": "^2.49.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

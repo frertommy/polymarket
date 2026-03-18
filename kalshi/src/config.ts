@@ -11,14 +11,22 @@ export function validateEnv(): void {
   }
 }
 
-// ─── Polymarket endpoints ────────────────────────────────────
-export const CLOB_BASE = "https://clob.polymarket.com";
-export const GAMMA_BASE = "https://gamma-api.polymarket.com";
+// ─── Kalshi API ──────────────────────────────────────────────
+export const KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2";
+
+// Series tickers for match-winner markets per league
+export const KALSHI_SERIES = [
+  "KXEPLGAME",        // Premier League
+  "KXLALIGAGAME",     // La Liga
+  "KXBUNDESLIGAGAME",  // Bundesliga
+  "KXSERIEAGAME",     // Serie A
+  "KXLIGUE1GAME",     // Ligue 1
+  "KXUCLGAME",        // Champions League
+];
 
 // ─── Polling intervals ──────────────────────────────────────
 export const DISCOVERY_INTERVAL = 5 * 60 * 1000; // 5 min — market discovery
-export const PRICE_FLUSH_INTERVAL = 1_000; // 1 sec — price change writes
-export const ORDERBOOK_INTERVAL = 60 * 60 * 1000; // 1 hour — orderbook depth
+export const PRICE_POLL_INTERVAL = 1_000; // 1 sec — REST price poll
 export const STATS_INTERVAL = 60_000; // 1 min — log stats
 
 // ─── Change detection ────────────────────────────────────────

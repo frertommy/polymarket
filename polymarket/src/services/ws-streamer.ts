@@ -8,23 +8,7 @@
 import { WSSubscriptionManager } from "@nevuamarkets/poly-websockets";
 import type { LastTradePriceEvent, PolymarketPriceUpdateEvent } from "@nevuamarkets/poly-websockets";
 import { log } from "../logger.js";
-
-export interface TradeEvent {
-  assetId: string;
-  market: string;
-  price: number;
-  size: number;
-  side: string;
-  timestamp: string;
-  transactionHash: string;
-}
-
-export interface PriceUpdate {
-  assetId: string;
-  price: number;
-  midpoint: number;
-  spread: number;
-}
+import type { TradeEvent, PriceUpdate } from "../types.js";
 
 interface StreamerCallbacks {
   onTrade?: (trade: TradeEvent) => void;

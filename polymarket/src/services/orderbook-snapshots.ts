@@ -7,18 +7,7 @@
 import { CLOB_BASE } from "../config.js";
 import { log } from "../logger.js";
 import { pfetch } from "../fetch.js";
-
-export interface OrderbookSnapshot {
-  assetId: string;
-  midpoint: number;
-  spread: number;
-  bestBid: number;
-  bestAsk: number;
-  lastTradePrice: number;
-  bidDepth: number;   // total size across all bid levels
-  askDepth: number;   // total size across all ask levels
-  timestamp: string;
-}
+import type { OrderbookSnapshot } from "../types.js";
 
 interface ClobBookResponse {
   market: string;
