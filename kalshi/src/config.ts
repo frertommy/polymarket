@@ -13,7 +13,9 @@ export function validateEnv(): void {
 
 // ─── Kalshi API ──────────────────────────────────────────────
 export const KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2";
+export const KALSHI_WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2";
 export const KALSHI_API_KEY = process.env.KALSHI_API_KEY ?? "";
+export const KALSHI_PRIVATE_KEY = process.env.KALSHI_PRIVATE_KEY ?? "";
 
 // Series tickers for match-winner markets per league
 export const KALSHI_SERIES = [
@@ -27,7 +29,7 @@ export const KALSHI_SERIES = [
 
 // ─── Polling intervals ──────────────────────────────────────
 export const DISCOVERY_INTERVAL = 5 * 60 * 1000; // 5 min — market discovery
-export const PRICE_POLL_INTERVAL = 1_000; // 1 sec — REST price poll
+export const PRICE_FLUSH_INTERVAL = 1_000; // 1 sec — price change writes
 export const STATS_INTERVAL = 60_000; // 1 min — log stats
 
 // ─── Change detection ────────────────────────────────────────

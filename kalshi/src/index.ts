@@ -2,31 +2,46 @@
  * Kalshi Soccer Odds Poller — Main Orchestrator
  *
  * Discovers match-winner markets across EPL/La Liga/Bundesliga/Serie A/
- * Ligue 1/UCL, polls REST API every 1 second, writes MSI-compatible
- * odds rows to Supabase with change detection.
+ * Ligue 1/UCL, subscribes to Kalshi WebSocket for real-time ticker updates,
+ * writes MSI-compatible odds rows to Supabase with change detection.
  *
  * Loops:
  *   1. Market discovery (every 5 min) — find matches, resolve fixture_ids
- *   2. Price poll (every 1 sec) — REST fetch + change detect + write
- *   3. Stats (every 1 min) — log counts
+ *   2. WS ticker stream (continuous) — real-time price updates
+ *   3. Price flush (every 1 sec) — write changed odds to Supabase
+ *   4. Stats (every 1 min) — log counts
  */
 import {
   validateEnv,
   DISCOVERY_INTERVAL,
-  PRICE_POLL_INTERVAL,
+  PRICE_FLUSH_INTERVAL,
   STATS_INTERVAL,
+  KALSHI_PRIVATE_KEY,
 } from "./config.js";
 import { log } from "./logger.js";
 import { discoverMatches } from "./services/market-discovery.js";
 import { initSupabase } from "./services/supabase-writer.js";
-import { updateMatches, pollCycle, getStats } from "./services/price-poller.js";
+import { KalshiStreamer, type TickerUpdate } from "./services/ws-streamer.js";
+import { PriceTracker } from "./services/price-tracker.js";
+import type { GroupedMatch } from "./types.js";
 
 validateEnv();
 initSupabase();
 
+// ─── State ──────────────────────────────────────────────────
+let currentMatches: GroupedMatch[] = [];
+let currentTickers: string[] = [];
+const priceTracker = new PriceTracker();
+
+// ─── WS callback → PriceTracker ────────────────────────────
+
+function onTicker(update: TickerUpdate): void {
+  priceTracker.onTickerUpdate(update.marketTicker, update.yesBid, update.yesAsk);
+}
+
 // ─── Market discovery cycle ─────────────────────────────────
 
-async function refreshMarkets(): Promise<void> {
+async function refreshMarkets(streamer: KalshiStreamer): Promise<void> {
   const result = await discoverMatches();
 
   if (result.matches.length === 0) {
@@ -34,41 +49,69 @@ async function refreshMarkets(): Promise<void> {
     return;
   }
 
-  updateMatches(result.matches);
+  const newTickers = result.allMarketTickers;
+
+  // Unsubscribe removed tickers
+  const removed = currentTickers.filter((t) => !newTickers.includes(t));
+  if (removed.length > 0) {
+    streamer.unsubscribe(removed);
+  }
+
+  // Subscribe new tickers
+  streamer.subscribe(newTickers);
+
+  // Update price tracker
+  priceTracker.updateMatches(result.matches);
+
+  currentMatches = result.matches;
+  currentTickers = newTickers;
 
   log.info(
-    `Markets refreshed: ${result.matches.length} matches, ${result.allMarketTickers.length} tickers`
+    `Markets refreshed: ${currentMatches.length} matches, ${currentTickers.length} tickers`
   );
 }
 
 // ─── Main ───────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  log.info("═══ Kalshi Soccer Odds Poller starting ═══");
+  log.info("═══ Kalshi Soccer Odds Poller v2 (WebSocket) starting ═══");
   log.info("Mode: MSI-compatible odds → odds_snapshots + latest_odds");
   log.info(
-    `Intervals: discovery=${DISCOVERY_INTERVAL / 1000}s, poll=${PRICE_POLL_INTERVAL}ms`
+    `Intervals: discovery=${DISCOVERY_INTERVAL / 1000}s, flush=${PRICE_FLUSH_INTERVAL}ms`
   );
 
-  // 1. Initial market discovery
-  await refreshMarkets();
+  if (!KALSHI_PRIVATE_KEY) {
+    log.error("KALSHI_PRIVATE_KEY not set — cannot connect to WebSocket");
+    log.error("Set KALSHI_PRIVATE_KEY env var with RSA private key PEM contents");
+    process.exit(1);
+  }
 
-  // 2. Price poll timer (1 second)
-  const pollTimer = setInterval(async () => {
+  // 1. Start WS streamer
+  const streamer = new KalshiStreamer({
+    onTicker,
+    onError: (err) => log.error("WS error:", err.message),
+  });
+  streamer.start();
+
+  // 2. Initial market discovery
+  await refreshMarkets(streamer);
+
+  // 3. Price flush timer (1 second)
+  const flushTimer = setInterval(async () => {
     try {
-      await pollCycle();
+      await priceTracker.flush();
     } catch (err) {
       log.error(
-        "Poll cycle failed:",
+        "Price flush failed:",
         err instanceof Error ? err.message : err
       );
     }
-  }, PRICE_POLL_INTERVAL);
+  }, PRICE_FLUSH_INTERVAL);
 
-  // 3. Market discovery timer (5 minutes)
+  // 4. Market discovery timer (5 minutes)
   const discoveryTimer = setInterval(async () => {
     try {
-      await refreshMarkets();
+      await refreshMarkets(streamer);
     } catch (err) {
       log.error(
         "Market refresh failed:",
@@ -77,28 +120,30 @@ async function main(): Promise<void> {
     }
   }, DISCOVERY_INTERVAL);
 
-  // 4. Stats timer (1 minute)
+  // 5. Stats timer (1 minute)
   const statsTimer = setInterval(() => {
-    const stats = getStats();
+    const wsStats = streamer.getStats();
+    const ptStats = priceTracker.getStats();
     log.info(
-      `Stats: ${stats.trackedMatches} matches, ${stats.totalPolls} polls, ` +
-        `${stats.totalWrites} writes, ${stats.totalSkipped} skipped`
+      `Stats: ${ptStats.trackedMatches} matches, ${wsStats.subscribedTickers} WS tickers, ` +
+        `${wsStats.tickersReceived} ticker updates, ${ptStats.totalWrites} writes, ` +
+        `${ptStats.totalSkipped} throttled, WS ${wsStats.connected ? "connected" : "DISCONNECTED"}`
     );
   }, STATS_INTERVAL);
 
   // ─── Graceful shutdown ─────────────────────────────────────
   const shutdown = async () => {
     log.info("Shutting down...");
-    clearInterval(pollTimer);
+    clearInterval(flushTimer);
     clearInterval(discoveryTimer);
     clearInterval(statsTimer);
 
-    // Final poll
-    await pollCycle();
+    await priceTracker.flush();
+    streamer.stop();
 
-    const stats = getStats();
+    const stats = priceTracker.getStats();
     log.info(
-      `Final: ${stats.totalWrites} odds rows written, ${stats.totalPolls} polls`
+      `Final: ${stats.totalWrites} odds rows written, ${stats.totalUpdates} ticker updates processed`
     );
     process.exit(0);
   };
