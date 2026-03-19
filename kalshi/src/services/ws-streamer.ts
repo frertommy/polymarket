@@ -89,9 +89,10 @@ export class KalshiStreamer {
     this.ws.on("open", () => {
       log.info("Kalshi WS connected");
 
-      // Re-subscribe to all tickers
-      if (this.subscribedTickers.size > 0) {
-        this.sendSubscribe([...this.subscribedTickers]);
+      // Subscribe to the ticker channel (receives ALL market updates)
+      // We filter by our tracked tickers in handleMessage
+      if (!this.subscribed) {
+        this.sendTickerSubscribe();
       }
     });
 
@@ -112,6 +113,7 @@ export class KalshiStreamer {
     this.ws.on("close", (code: number, reason: Buffer) => {
       log.warn(`Kalshi WS closed: ${code} ${reason.toString()}`);
       this.ws = null;
+      this.subscribed = false;
 
       // Auto-reconnect after 5 seconds
       if (this.alive) {
@@ -127,9 +129,13 @@ export class KalshiStreamer {
       const ticker = msg.msg as Record<string, unknown>;
       if (!ticker) return;
 
+      const marketTicker = ticker.market_ticker as string;
+
+      // Only process tickers we're tracking
+      if (!this.subscribedTickers.has(marketTicker)) return;
+
       this.tickerCount++;
 
-      const marketTicker = ticker.market_ticker as string;
       const yesBid = parseFloat(String(ticker.yes_bid ?? "0"));
       const yesAsk = parseFloat(String(ticker.yes_ask ?? "0"));
       const lastPrice = parseFloat(String(ticker.last_price ?? "0"));
@@ -140,65 +146,46 @@ export class KalshiStreamer {
         yesAsk,
         lastPrice,
       });
-    } else if (type === "orderbook_snapshot" || type === "orderbook_delta") {
-      // We could handle orderbook too, but ticker is sufficient for price tracking
     } else if (type === "error") {
       log.error("Kalshi WS server error:", JSON.stringify(msg));
     }
-    // Ignore subscription confirmations, heartbeats, etc.
+    // Ignore subscription confirmations, heartbeats, orderbook, etc.
   }
 
-  private sendSubscribe(tickers: string[]): void {
+  private subscribed = false;
+
+  private sendTickerSubscribe(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
+    // Subscribe to the ticker channel globally — receives updates for ALL markets
+    // We filter by subscribedTickers set in handleMessage
     const msg = {
       id: this.msgId++,
       cmd: "subscribe",
       params: {
         channels: ["ticker"],
-        market_tickers: tickers,
       },
     };
 
     this.ws.send(JSON.stringify(msg));
-    log.info(`Kalshi WS: subscribed to ${tickers.length} tickers`);
+    this.subscribed = true;
+    log.info("Kalshi WS: subscribed to global ticker channel");
   }
 
+  /**
+   * Track which market tickers we care about.
+   * The WS receives ALL ticker updates — we filter in handleMessage.
+   */
   subscribe(tickers: string[]): void {
-    const newTickers = tickers.filter((t) => !this.subscribedTickers.has(t));
-    if (newTickers.length === 0) return;
-
-    for (const t of newTickers) {
+    for (const t of tickers) {
       this.subscribedTickers.add(t);
     }
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendSubscribe(newTickers);
-    }
-
-    log.info(
-      `Kalshi WS: ${newTickers.length} new tickers (${this.subscribedTickers.size} total)`
-    );
+    log.info(`Kalshi WS: tracking ${this.subscribedTickers.size} tickers`);
   }
 
   unsubscribe(tickers: string[]): void {
-    const toRemove = tickers.filter((t) => this.subscribedTickers.has(t));
-    if (toRemove.length === 0) return;
-
-    for (const t of toRemove) {
+    for (const t of tickers) {
       this.subscribedTickers.delete(t);
-    }
-
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const msg = {
-        id: this.msgId++,
-        cmd: "unsubscribe",
-        params: {
-          channels: ["ticker"],
-          market_tickers: toRemove,
-        },
-      };
-      this.ws.send(JSON.stringify(msg));
     }
   }
 
