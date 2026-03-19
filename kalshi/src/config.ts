@@ -1,3 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 // ─── Environment ─────────────────────────────────────────────
 export const SUPABASE_URL = process.env.SUPABASE_URL ?? "";
 export const SUPABASE_KEY = process.env.SUPABASE_KEY ?? "";
@@ -15,7 +21,29 @@ export function validateEnv(): void {
 export const KALSHI_BASE = "https://api.elections.kalshi.com/trade-api/v2";
 export const KALSHI_WS_URL = "wss://api.elections.kalshi.com/trade-api/ws/v2";
 export const KALSHI_API_KEY = process.env.KALSHI_API_KEY ?? "";
-export const KALSHI_PRIVATE_KEY = process.env.KALSHI_PRIVATE_KEY ?? "";
+
+// Load private key from env var OR from KALSHI_PRIVATE_KEY.txt file
+function loadPrivateKey(): string {
+  // Try env var first
+  if (process.env.KALSHI_PRIVATE_KEY) return process.env.KALSHI_PRIVATE_KEY;
+
+  // Try file next to the source
+  const keyPaths = [
+    path.resolve(__dirname, "../KALSHI_PRIVATE_KEY.txt"),       // dist/
+    path.resolve(__dirname, "../../KALSHI_PRIVATE_KEY.txt"),    // project root
+  ];
+
+  for (const p of keyPaths) {
+    try {
+      const key = fs.readFileSync(p, "utf-8").trim();
+      if (key.includes("BEGIN RSA PRIVATE KEY")) return key;
+    } catch { /* skip */ }
+  }
+
+  return "";
+}
+
+export const KALSHI_PRIVATE_KEY = loadPrivateKey();
 
 // Series tickers for match-winner markets per league
 export const KALSHI_SERIES = [
