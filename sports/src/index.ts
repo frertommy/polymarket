@@ -5,9 +5,8 @@
  * odds and writes to sport-specific Supabase projects.
  *
  * Each sport gets:
- *   - Polymarket discovery (Gamma API, tag-based)
- *   - Kalshi discovery (series ticker-based)
- *   - Real-time price tracking via Polymarket WS + Kalshi REST (1s)
+ *   - Polymarket discovery (Gamma API) + REST price polling (CLOB midpoint)
+ *   - Kalshi discovery (series ticker) + WebSocket real-time ticker updates
  *   - Change detection + per-match throttle
  *   - Writes to its own Supabase (matches, odds_snapshots, latest_odds)
  */
@@ -17,15 +16,15 @@ import {
   DISCOVERY_INTERVAL,
   PRICE_FLUSH_INTERVAL,
   STATS_INTERVAL,
-  KALSHI_BASE,
-  KALSHI_API_KEY,
+  KALSHI_PRIVATE_KEY,
 } from "./config.js";
 import { log } from "./logger.js";
 import { discoverPolymarketMatches } from "./services/polymarket-discovery.js";
 import { discoverKalshiMatches } from "./services/kalshi-discovery.js";
 import { initSupabaseClients, upsertMatches } from "./services/supabase-writer.js";
 import { PriceTracker } from "./services/price-tracker.js";
-import type { TrackedMatch, KalshiMarket } from "./types.js";
+import { KalshiStreamer, type TickerUpdate } from "./services/ws-streamer.js";
+import type { TrackedMatch } from "./types.js";
 
 validateEnv();
 initSupabaseClients(SPORTS);
@@ -33,51 +32,15 @@ initSupabaseClients(SPORTS);
 const priceTracker = new PriceTracker();
 let allMatches: TrackedMatch[] = [];
 
-// ─── Kalshi REST poll for price updates ─────────────────────
+// ─── Kalshi WS callback → PriceTracker ──────────────────────
 
-function kalshiFetch(url: string): Promise<Response> {
-  const headers: Record<string, string> = {};
-  if (KALSHI_API_KEY) headers["Authorization"] = `Bearer ${KALSHI_API_KEY}`;
-  return fetch(url, { headers });
-}
-
-async function pollKalshiPrices(): Promise<void> {
-  const kalshiMatches = allMatches.filter((m) => m.source === "kalshi");
-  if (kalshiMatches.length === 0) return;
-
-  // Group by event ticker to minimize API calls
-  const eventTickers = new Set<string>();
-  for (const m of kalshiMatches) {
-    // matchId format: kalshi_KXNBAGAME-26MAR22WASNYK
-    // homeAssetId format: KXNBAGAME-26MAR22WASNYK-NYK (full ticker)
-    const parts = m.homeAssetId.split("-");
-    parts.pop();
-    eventTickers.add(parts.join("-"));
-  }
-
-  const CONCURRENCY = 10;
-  const tickers = [...eventTickers];
-  for (let i = 0; i < tickers.length; i += CONCURRENCY) {
-    const batch = tickers.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map(async (eventTicker) => {
-        try {
-          const res = await kalshiFetch(
-            `${KALSHI_BASE}/markets?event_ticker=${eventTicker}&limit=10`
-          );
-          if (!res.ok) return;
-          const data = (await res.json()) as { markets: KalshiMarket[] };
-          for (const m of data.markets ?? []) {
-            const bid = parseFloat(m.yes_bid_dollars || "0");
-            const ask = parseFloat(m.yes_ask_dollars || "0");
-            const price = bid > 0 && ask > 0 ? (bid + ask) / 2 : 0;
-            if (price > 0) {
-              priceTracker.onPriceChange(m.ticker, price);
-            }
-          }
-        } catch { /* skip */ }
-      })
-    );
+function onKalshiTicker(update: TickerUpdate): void {
+  const mid =
+    update.yesBid > 0 && update.yesAsk > 0
+      ? (update.yesBid + update.yesAsk) / 2
+      : 0;
+  if (mid > 0) {
+    priceTracker.onPriceChange(update.marketTicker, mid);
   }
 }
 
@@ -94,7 +57,6 @@ async function pollPolymarketPrices(): Promise<void> {
     await Promise.all(
       batch.map(async (match) => {
         try {
-          // Fetch midpoint for home token
           const [homeRes, awayRes] = await Promise.all([
             fetch(`https://clob.polymarket.com/midpoint?token_id=${match.homeAssetId}`),
             fetch(`https://clob.polymarket.com/midpoint?token_id=${match.awayAssetId}`),
@@ -117,34 +79,38 @@ async function pollPolymarketPrices(): Promise<void> {
 
 // ─── Discovery cycle ────────────────────────────────────────
 
-async function runDiscovery(): Promise<void> {
+async function runDiscovery(streamer: KalshiStreamer): Promise<void> {
   log.info("Starting multi-sport discovery...");
   const newMatches: TrackedMatch[] = [];
 
   for (const sport of SPORTS) {
-    // Polymarket
     const polyMatches = await discoverPolymarketMatches(
       sport.name,
       sport.polymarketTag
     );
     newMatches.push(...polyMatches);
 
-    // Kalshi
     const kalshiMatches = await discoverKalshiMatches(
       sport.name,
       sport.kalshiSeries
     );
     newMatches.push(...kalshiMatches);
 
-    // Upsert matches to sport-specific Supabase
     const sportMatches = [...polyMatches, ...kalshiMatches];
     await upsertMatches(sport.name, sportMatches);
   }
 
+  // Update price tracker
   priceTracker.updateMatches(newMatches);
+
+  // Update Kalshi WS subscriptions
+  const kalshiTickers = newMatches
+    .filter((m) => m.source === "kalshi")
+    .flatMap((m) => [m.homeAssetId, m.awayAssetId]);
+  streamer.subscribe(kalshiTickers);
+
   allMatches = newMatches;
 
-  // Log summary
   for (const sport of SPORTS) {
     const poly = newMatches.filter(
       (m) => m.sport === sport.name && m.source === "polymarket"
@@ -161,25 +127,37 @@ async function runDiscovery(): Promise<void> {
 // ─── Main ───────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  log.info("═══ Multi-Sport Prediction Market Poller starting ═══");
+  log.info("═══ Multi-Sport Prediction Market Poller v2 (WS) starting ═══");
   log.info(`Sports: ${SPORTS.map((s) => s.name.toUpperCase()).join(", ")}`);
   log.info(
     `Intervals: discovery=${DISCOVERY_INTERVAL / 1000}s, flush=${PRICE_FLUSH_INTERVAL}ms`
   );
 
-  // 1. Initial discovery
-  await runDiscovery();
+  // 1. Start Kalshi WS streamer
+  const kalshiStreamer = new KalshiStreamer({
+    onTicker: onKalshiTicker,
+    onError: (err) => log.error("Kalshi WS error:", err.message),
+  });
 
-  // 2. Kalshi + Polymarket REST price poll (1 second)
-  const pollTimer = setInterval(async () => {
+  if (KALSHI_PRIVATE_KEY) {
+    kalshiStreamer.start();
+  } else {
+    log.warn("KALSHI_PRIVATE_KEY not set — Kalshi WS disabled, no Kalshi real-time updates");
+  }
+
+  // 2. Initial discovery
+  await runDiscovery(kalshiStreamer);
+
+  // 3. Polymarket REST price poll (1 second)
+  const polyPollTimer = setInterval(async () => {
     try {
-      await Promise.all([pollKalshiPrices(), pollPolymarketPrices()]);
+      await pollPolymarketPrices();
     } catch (err) {
-      log.error("Poll error:", err instanceof Error ? err.message : err);
+      log.error("Poly poll error:", err instanceof Error ? err.message : err);
     }
   }, PRICE_FLUSH_INTERVAL);
 
-  // 3. Price flush timer (1 second, offset by 500ms)
+  // 4. Price flush timer (1 second, offset by 500ms)
   setTimeout(() => {
     setInterval(async () => {
       try {
@@ -190,19 +168,23 @@ async function main(): Promise<void> {
     }, PRICE_FLUSH_INTERVAL);
   }, 500);
 
-  // 4. Discovery refresh (5 minutes)
+  // 5. Discovery refresh (5 minutes)
   const discoveryTimer = setInterval(async () => {
     try {
-      await runDiscovery();
+      await runDiscovery(kalshiStreamer);
     } catch (err) {
       log.error("Discovery error:", err instanceof Error ? err.message : err);
     }
   }, DISCOVERY_INTERVAL);
 
-  // 5. Stats (1 minute)
+  // 6. Stats (1 minute)
   const statsTimer = setInterval(() => {
-    const stats = priceTracker.getStats();
-    for (const [sport, s] of stats) {
+    const wsStats = kalshiStreamer.getStats();
+    const ptStats = priceTracker.getStats();
+    log.info(
+      `Kalshi WS: ${wsStats.subscribedTickers} tickers, ${wsStats.tickersReceived} updates, ${wsStats.connected ? "connected" : "DISCONNECTED"}`
+    );
+    for (const [sport, s] of ptStats) {
       log.info(
         `[${sport}] ${s.matches} matches, ${s.updates} updates, ${s.writes} writes, ${s.skipped} skipped`
       );
@@ -212,10 +194,11 @@ async function main(): Promise<void> {
   // ─── Graceful shutdown ─────────────────────────────────────
   const shutdown = async () => {
     log.info("Shutting down...");
-    clearInterval(pollTimer);
+    clearInterval(polyPollTimer);
     clearInterval(discoveryTimer);
     clearInterval(statsTimer);
     await priceTracker.flush();
+    kalshiStreamer.stop();
     process.exit(0);
   };
 
