@@ -81,6 +81,40 @@ async function pollKalshiPrices(): Promise<void> {
   }
 }
 
+// ─── Polymarket REST poll for price updates ─────────────────
+
+async function pollPolymarketPrices(): Promise<void> {
+  const polyMatches = allMatches.filter((m) => m.source === "polymarket");
+  if (polyMatches.length === 0) return;
+
+  // Batch fetch midpoints via CLOB API (5 concurrent)
+  const CONCURRENCY = 5;
+  for (let i = 0; i < polyMatches.length; i += CONCURRENCY) {
+    const batch = polyMatches.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(async (match) => {
+        try {
+          // Fetch midpoint for home token
+          const [homeRes, awayRes] = await Promise.all([
+            fetch(`https://clob.polymarket.com/midpoint?token_id=${match.homeAssetId}`),
+            fetch(`https://clob.polymarket.com/midpoint?token_id=${match.awayAssetId}`),
+          ]);
+          if (!homeRes.ok || !awayRes.ok) return;
+
+          const homeData = (await homeRes.json()) as { mid: string };
+          const awayData = (await awayRes.json()) as { mid: string };
+
+          const homePrice = parseFloat(homeData.mid || "0");
+          const awayPrice = parseFloat(awayData.mid || "0");
+
+          if (homePrice > 0) priceTracker.onPriceChange(match.homeAssetId, homePrice);
+          if (awayPrice > 0) priceTracker.onPriceChange(match.awayAssetId, awayPrice);
+        } catch { /* skip */ }
+      })
+    );
+  }
+}
+
 // ─── Discovery cycle ────────────────────────────────────────
 
 async function runDiscovery(): Promise<void> {
@@ -136,12 +170,12 @@ async function main(): Promise<void> {
   // 1. Initial discovery
   await runDiscovery();
 
-  // 2. Kalshi REST price poll (1 second)
+  // 2. Kalshi + Polymarket REST price poll (1 second)
   const pollTimer = setInterval(async () => {
     try {
-      await pollKalshiPrices();
+      await Promise.all([pollKalshiPrices(), pollPolymarketPrices()]);
     } catch (err) {
-      log.error("Kalshi poll error:", err instanceof Error ? err.message : err);
+      log.error("Poll error:", err instanceof Error ? err.message : err);
     }
   }, PRICE_FLUSH_INTERVAL);
 
