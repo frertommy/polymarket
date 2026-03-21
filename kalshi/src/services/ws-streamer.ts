@@ -89,11 +89,8 @@ export class KalshiStreamer {
     this.ws.on("open", () => {
       log.info("Kalshi WS connected");
 
-      // Subscribe to the ticker channel (receives ALL market updates)
-      // We filter by our tracked tickers in handleMessage
-      if (!this.subscribed) {
-        this.sendTickerSubscribe();
-      }
+      // Always subscribe to ticker channel on connect/reconnect
+      this.sendTickerSubscribe();
     });
 
     this.ws.on("message", (data: Buffer) => {
