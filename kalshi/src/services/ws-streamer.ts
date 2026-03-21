@@ -63,8 +63,10 @@ export class KalshiStreamer {
   private callbacks: StreamerCallbacks;
   private tickerCount = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
   private alive = true;
   private msgId = 1;
+  private lastMessageTime = 0;
 
   constructor(callbacks: StreamerCallbacks = {}) {
     this.callbacks = callbacks;
@@ -75,6 +77,30 @@ export class KalshiStreamer {
       log.warn("Kalshi WS: missing API key or private key, falling back to REST polling");
       return;
     }
+    this.connect();
+
+    // Health check every 30 seconds — detect zombie connections
+    this.healthCheckTimer = setInterval(() => {
+      if (!this.alive) return;
+      const isOpen = this.ws?.readyState === WebSocket.OPEN;
+      const timeSinceMsg = Date.now() - this.lastMessageTime;
+      if (!isOpen || (this.lastMessageTime > 0 && timeSinceMsg > 120_000)) {
+        log.warn(`Kalshi WS health check failed — forcing reconnect`);
+        this.forceReconnect();
+      }
+    }, 30_000);
+  }
+
+  private forceReconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws) {
+      try { this.ws.terminate(); } catch { /* ignore */ }
+      this.ws = null;
+    }
+    this.subscribed = false;
     this.connect();
   }
 
@@ -94,6 +120,7 @@ export class KalshiStreamer {
     });
 
     this.ws.on("message", (data: Buffer) => {
+      this.lastMessageTime = Date.now();
       try {
         const msg = JSON.parse(data.toString());
         this.handleMessage(msg);
@@ -199,6 +226,10 @@ export class KalshiStreamer {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
     }
     if (this.ws) {
       this.ws.close();
