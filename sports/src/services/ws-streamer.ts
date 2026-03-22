@@ -165,9 +165,9 @@ export class KalshiStreamer {
 
       this.tickerCount++;
 
-      const yesBid = parseFloat(String(ticker.yes_bid ?? "0"));
-      const yesAsk = parseFloat(String(ticker.yes_ask ?? "0"));
-      const lastPrice = parseFloat(String(ticker.last_price ?? "0"));
+      const yesBid = parseFloat(String(ticker.yes_bid_dollars ?? ticker.yes_bid ?? "0"));
+      const yesAsk = parseFloat(String(ticker.yes_ask_dollars ?? ticker.yes_ask ?? "0"));
+      const lastPrice = parseFloat(String(ticker.price_dollars ?? ticker.last_price ?? "0"));
 
       this.callbacks.onTicker?.({
         marketTicker,
