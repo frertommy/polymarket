@@ -21,7 +21,7 @@ import {
 import { log } from "./logger.js";
 import { discoverPolymarketMatches } from "./services/polymarket-discovery.js";
 import { discoverKalshiMatches } from "./services/kalshi-discovery.js";
-import { initSupabaseClients, upsertMatches } from "./services/supabase-writer.js";
+import { initSupabaseClients, upsertMatches, writePolymarketMatchOdds } from "./services/supabase-writer.js";
 import { PriceTracker } from "./services/price-tracker.js";
 import { KalshiStreamer, type TickerUpdate } from "./services/ws-streamer.js";
 import type { TrackedMatch } from "./types.js";
@@ -98,6 +98,9 @@ async function runDiscovery(streamer: KalshiStreamer): Promise<void> {
 
     const sportMatches = [...polyMatches, ...kalshiMatches];
     await upsertMatches(sport.name, sportMatches);
+
+    // Write Polymarket data to polymarket_match_odds for NBA/MLB
+    await writePolymarketMatchOdds(sport.name, polyMatches);
   }
 
   // Update price tracker

@@ -1,15 +1,12 @@
 /**
  * Supabase writer — manages per-sport Supabase clients and writes
- * odds to matches, odds_snapshots, and latest_odds tables.
+ * odds to sport-specific tables.
  *
  * Each sport's Supabase has a different schema:
- *   NHL:    match_id (text), source, home_odds, away_odds, home_prob, away_prob
- *   Tennis: match_id (text), bookmaker, player1_odds, player2_odds
- *   NBA:    fixture_id (bigint, FK), bookmaker, home_odds, away_odds, draw_odds, days_before_tipoff
- *   MLB:    fixture_id (bigint, FK), bookmaker, home_odds, away_odds, days_before_kickoff
- *
- * NBA/MLB use integer fixture_ids with FK constraints populated by external services.
- * The sports poller generates string match_ids, so it can only write to NHL and Tennis.
+ *   NHL:    odds_snapshots/latest_odds with match_id (text), source, home/away odds+prob
+ *   Tennis: odds_snapshots/latest_odds with match_id (text), bookmaker, player1/player2 odds
+ *   NBA:    polymarket_match_odds (MSI2026 pattern) — no FK constraints
+ *   MLB:    polymarket_match_odds (MSI2026 pattern) — no FK constraints
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { BATCH_SIZE, type SportConfig } from "../config.js";
@@ -18,19 +15,17 @@ import type { OddsRow, TrackedMatch } from "../types.js";
 
 const clients = new Map<string, SupabaseClient>();
 
-/** Sports that use string match_id (compatible with this poller) */
-const WRITABLE_SPORTS = new Set(["nhl", "tennis"]);
+/** Sports that write to odds_snapshots/latest_odds (string match_id) */
+const ODDS_TABLE_SPORTS = new Set(["nhl", "tennis"]);
+
+/** Sports that write to polymarket_match_odds (MSI2026 pattern) */
+const PMO_SPORTS = new Set(["nba", "mlb"]);
 
 export function initSupabaseClients(sports: SportConfig[]): void {
   for (const sport of sports) {
     const client = createClient(sport.supabaseUrl, sport.supabaseKey);
     clients.set(sport.name, client);
     log.info(`[${sport.name}] Supabase client initialized`);
-    if (!WRITABLE_SPORTS.has(sport.name)) {
-      log.warn(
-        `[${sport.name}] DB uses integer fixture_id — odds writes skipped (handled by standalone service)`
-      );
-    }
   }
 }
 
@@ -44,13 +39,12 @@ export async function upsertMatches(
   sport: string,
   matches: TrackedMatch[]
 ): Promise<void> {
-  if (!WRITABLE_SPORTS.has(sport)) return;
+  if (!ODDS_TABLE_SPORTS.has(sport)) return;
 
   const sb = getClient(sport);
   if (!sb || matches.length === 0) return;
 
   if (sport === "nhl") {
-    // NHL matches: match_id, sport, home_team, away_team, game_start_time, source
     const rows = matches.map((m) => ({
       match_id: m.matchId,
       sport: m.sport,
@@ -68,7 +62,6 @@ export async function upsertMatches(
       if (error) log.error(`[${sport}] matches upsert error:`, error.message);
     }
   } else if (sport === "tennis") {
-    // Tennis matches: match_id, player1, player2, commence_time, status
     const rows = matches.map((m) => ({
       match_id: m.matchId,
       player1: m.homeTeam,
@@ -88,13 +81,13 @@ export async function upsertMatches(
   }
 }
 
-// ─── Write odds ─────────────────────────────────────────────
+// ─── Write odds (NHL/Tennis → odds_snapshots/latest_odds) ────
 
 export async function writeOddsRows(
   sport: string,
   rows: OddsRow[]
 ): Promise<void> {
-  if (!WRITABLE_SPORTS.has(sport)) return;
+  if (!ODDS_TABLE_SPORTS.has(sport)) return;
 
   const sb = getClient(sport);
   if (!sb || rows.length === 0) return;
@@ -106,10 +99,75 @@ export async function writeOddsRows(
   }
 }
 
+// ─── Write polymarket_match_odds (NBA/MLB) ───────────────────
+
+/** Previous volume cache for delta calculation */
+const prevVolumeMap = new Map<string, number>();
+
+export async function writePolymarketMatchOdds(
+  sport: string,
+  matches: TrackedMatch[]
+): Promise<void> {
+  if (!PMO_SPORTS.has(sport)) return;
+
+  const sb = getClient(sport);
+  if (!sb) return;
+
+  // Only write Polymarket matches (not Kalshi — Kalshi data goes through the standalone services)
+  const polyMatches = matches.filter(
+    (m) => m.source === "polymarket" && m.homePrice > 0.001
+  );
+  if (polyMatches.length === 0) return;
+
+  const now = new Date().toISOString();
+  const rows: Record<string, unknown>[] = [];
+
+  for (const m of polyMatches) {
+    const homeProb = Math.round(m.homePrice * 10000) / 10000;
+    const awayProb = Math.round(m.awayPrice * 10000) / 10000;
+    const maxProb = Math.max(homeProb, awayProb);
+    const resolved = maxProb >= 0.99;
+
+    // Volume delta
+    const volKey = `${sport}|${m.polymarketEventId}`;
+    const prevVol = prevVolumeMap.get(volKey);
+    const volumeDelta =
+      prevVol !== undefined && m.volume !== undefined
+        ? Math.round((m.volume - prevVol) * 100) / 100
+        : 0;
+    if (m.volume !== undefined) prevVolumeMap.set(volKey, m.volume);
+
+    rows.push({
+      league: sport.toUpperCase(),
+      event_title: m.eventTitle ?? `${m.homeTeam} vs. ${m.awayTeam}`,
+      polymarket_event_id: m.polymarketEventId ?? m.matchId,
+      market_type: "moneyline",
+      market_question: m.eventTitle ?? `${m.homeTeam} vs. ${m.awayTeam}`,
+      market_status: resolved ? "resolved" : "active",
+      outcomes: [m.homeTeam, m.awayTeam],
+      outcome_prices: [homeProb, awayProb],
+      volume: m.volume ?? 0,
+      volume_delta: volumeDelta,
+      snapshot_time: now,
+    });
+  }
+
+  if (rows.length === 0) return;
+
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const { error } = await sb.from("polymarket_match_odds").insert(batch);
+    if (error) {
+      log.error(`[${sport}] polymarket_match_odds error:`, error.message);
+    }
+  }
+
+  log.debug(`[${sport}] Wrote ${rows.length} polymarket_match_odds rows`);
+}
+
 // ─── NHL: match_id, source, home_odds, away_odds, home_prob, away_prob ──
 
 async function writeNhlOdds(sb: SupabaseClient, rows: OddsRow[]): Promise<void> {
-  // 1. Archive: odds_snapshots
   const snapshotRows = rows.map((r) => ({
     match_id: r.match_id,
     source: r.source,
@@ -131,7 +189,6 @@ async function writeNhlOdds(sb: SupabaseClient, rows: OddsRow[]): Promise<void> 
     if (error) log.error(`[nhl] odds_snapshots error:`, error.message);
   }
 
-  // 2. Serving: latest_odds
   const latestRows = rows.map((r) => ({
     match_id: r.match_id,
     source: r.source,
@@ -156,12 +213,11 @@ async function writeNhlOdds(sb: SupabaseClient, rows: OddsRow[]): Promise<void> 
 // ─── Tennis: match_id, bookmaker, player1_odds, player2_odds ────────
 
 async function writeTennisOdds(sb: SupabaseClient, rows: OddsRow[]): Promise<void> {
-  // 1. Archive: odds_snapshots
   const snapshotRows = rows.map((r) => ({
     match_id: r.match_id,
-    bookmaker: r.source, // Tennis uses "bookmaker" column, not "source"
-    player1_odds: r.home_odds, // home → player1
-    player2_odds: r.away_odds, // away → player2
+    bookmaker: r.source,
+    player1_odds: r.home_odds,
+    player2_odds: r.away_odds,
     snapshot_time: r.snapshot_time,
     source: r.source,
   }));
@@ -177,7 +233,6 @@ async function writeTennisOdds(sb: SupabaseClient, rows: OddsRow[]): Promise<voi
     if (error) log.error(`[tennis] odds_snapshots error:`, error.message);
   }
 
-  // 2. Serving: latest_odds
   const latestRows = rows.map((r) => ({
     match_id: r.match_id,
     bookmaker: r.source,

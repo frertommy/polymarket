@@ -20,6 +20,11 @@ export interface TrackedMatch {
   lastWrittenHome: number;
   lastWrittenAway: number;
   lastWriteTime: number;
+
+  // Polymarket metadata (for polymarket_match_odds table)
+  polymarketEventId?: string;
+  eventTitle?: string;
+  volume?: number;
 }
 
 // ─── Odds row (for Supabase) ────────────────────────────────
@@ -43,6 +48,7 @@ export interface GammaMarket {
   outcomes: string; // JSON string
   outcomePrices: string; // JSON string
   clobTokenIds: string; // JSON string
+  volumeNum: number;
   active: boolean;
   closed: boolean;
   enableOrderBook: boolean;
@@ -58,6 +64,7 @@ export interface GammaEvent {
   id: string;
   title: string;
   slug: string;
+  volume: number;
   markets: GammaMarket[];
   active: boolean;
   closed: boolean;

@@ -68,6 +68,7 @@ export async function discoverPolymarketMatches(
 
       const gameStartTime = m.gameStartTime ?? new Date().toISOString();
       const matchId = `poly_${m.conditionId}`;
+      const totalVolume = moneyline.reduce((sum, mk) => sum + (mk.volumeNum || 0), 0);
 
       matches.push({
         matchId,
@@ -83,6 +84,9 @@ export async function discoverPolymarketMatches(
         lastWrittenHome: 0,
         lastWrittenAway: 0,
         lastWriteTime: 0,
+        polymarketEventId: event.id,
+        eventTitle: event.title,
+        volume: Math.round(totalVolume * 100) / 100,
       });
       continue;
     }
@@ -102,6 +106,8 @@ export async function discoverPolymarketMatches(
       const homePrices = safeJsonParse<string[]>(homeMarket.outcomePrices, []);
       const awayPrices = safeJsonParse<string[]>(awayMarket.outcomePrices, []);
 
+      const totalVolume2 = moneyline.reduce((sum, mk) => sum + (mk.volumeNum || 0), 0);
+
       matches.push({
         matchId: `poly_${negRiskMarketId || moneyline[0].conditionId}`,
         sport,
@@ -116,6 +122,9 @@ export async function discoverPolymarketMatches(
         lastWrittenHome: 0,
         lastWrittenAway: 0,
         lastWriteTime: 0,
+        polymarketEventId: event.id,
+        eventTitle: event.title,
+        volume: Math.round(totalVolume2 * 100) / 100,
       });
     }
   }
