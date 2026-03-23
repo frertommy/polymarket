@@ -28,6 +28,31 @@ function parseEventTitle(title: string): { home: string; away: string } | null {
   return { home: match[1].trim(), away: match[2].trim() };
 }
 
+// ─── Parse date from sub_title like "TOT vs NFO (Mar 22)" ──
+
+const MONTHS: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+const SUB_TITLE_DATE_RE = /\((\w{3})\s+(\d{1,2})\)/;
+
+function parseSubTitleDate(subTitle: string | undefined): string | null {
+  if (!subTitle) return null;
+  const m = subTitle.match(SUB_TITLE_DATE_RE);
+  if (!m) return null;
+  const month = MONTHS[m[1].toLowerCase()];
+  if (month === undefined) return null;
+  const day = parseInt(m[2], 10);
+  const now = new Date();
+  const year = now.getFullYear();
+  const date = new Date(year, month, day);
+  // If the date is more than 2 months in the past, assume next year
+  if (date.getTime() < now.getTime() - 60 * 86400000) {
+    date.setFullYear(year + 1);
+  }
+  return date.toISOString();
+}
+
 // ─── Fetch events for a single series ───────────────────────
 
 async function fetchSeriesEvents(
@@ -208,12 +233,12 @@ export async function discoverMatches(): Promise<DiscoveryResult> {
     if (!teams) continue;
     const homeCanonical = resolveTeamName(teams.home);
     const awayCanonical = resolveTeamName(teams.away);
-    // Use current date as fallback — the ±3 day window in lookupFixtureId
-    // is wide enough for upcoming matches
+    // Parse actual match date from sub_title (e.g. "TOT vs NFO (Mar 22)")
+    const eventDate = parseSubTitleDate(event.sub_title) ?? new Date().toISOString();
     const fixtureId = lookupFixtureId(
       homeCanonical,
       awayCanonical,
-      new Date().toISOString()
+      eventDate
     );
     if (fixtureId !== null) {
       candidateEvents.push(event);

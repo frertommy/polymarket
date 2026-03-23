@@ -138,7 +138,7 @@ export function lookupFixtureId(
 
   for (const f of cachedFixtures) {
     const diff = Math.abs(date.getTime() - new Date(f.date).getTime());
-    if (diff > 3 * 86400000) continue;
+    if (diff > 14 * 86400000) continue;
 
     if (
       (f.home_team === homeCanonical && f.away_team === awayCanonical) ||
